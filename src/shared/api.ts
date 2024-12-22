@@ -5,6 +5,7 @@ export type ApiProvider =
 	| "vertex"
 	| "openai"
 	| "ollama"
+	| "lmstudio"
 	| "gemini"
 	| "openai-native"
 
@@ -19,6 +20,7 @@ export interface ApiHandlerOptions {
 	awsSecretKey?: string
 	awsSessionToken?: string
 	awsRegion?: string
+	awsUseCrossRegionInference?: boolean
 	vertexProjectId?: string
 	vertexRegion?: string
 	openAiBaseUrl?: string
@@ -26,6 +28,8 @@ export interface ApiHandlerOptions {
 	openAiModelId?: string
 	ollamaModelId?: string
 	ollamaBaseUrl?: string
+	lmStudioModelId?: string
+	lmStudioBaseUrl?: string
 	geminiApiKey?: string
 	openAiNativeApiKey?: string
 	azureApiVersion?: string
@@ -66,6 +70,16 @@ export const anthropicModels = {
 		cacheWritesPrice: 3.75, // $3.75 per million tokens
 		cacheReadsPrice: 0.3, // $0.30 per million tokens
 	},
+	"claude-3-5-haiku-20241022": {
+		maxTokens: 8192,
+		contextWindow: 200_000,
+		supportsImages: false,
+		supportsPromptCache: true,
+		inputPrice: 1.0,
+		outputPrice: 5.0,
+		cacheWritesPrice: 1.25,
+		cacheReadsPrice: 0.1,
+	},
 	"claude-3-opus-20240229": {
 		maxTokens: 4096,
 		contextWindow: 200_000,
@@ -102,6 +116,14 @@ export const bedrockModels = {
 		inputPrice: 3.0,
 		outputPrice: 15.0,
 	},
+	"anthropic.claude-3-5-haiku-20241022-v1:0": {
+		maxTokens: 8192,
+		contextWindow: 200_000,
+		supportsImages: false,
+		supportsPromptCache: false,
+		inputPrice: 1.0,
+		outputPrice: 5.0,
+	},
 	"anthropic.claude-3-5-sonnet-20240620-v1:0": {
 		maxTokens: 8192,
 		contextWindow: 200_000,
@@ -117,6 +139,14 @@ export const bedrockModels = {
 		supportsPromptCache: false,
 		inputPrice: 15.0,
 		outputPrice: 75.0,
+	},
+	"anthropic.claude-3-sonnet-20240229-v1:0": {
+		maxTokens: 4096,
+		contextWindow: 200_000,
+		supportsImages: true,
+		supportsPromptCache: false,
+		inputPrice: 3.0,
+		outputPrice: 15.0,
 	},
 	"anthropic.claude-3-haiku-20240307-v1:0": {
 		maxTokens: 4096,
@@ -167,6 +197,14 @@ export const vertexModels = {
 		inputPrice: 3.0,
 		outputPrice: 15.0,
 	},
+	"claude-3-5-haiku@20241022": {
+		maxTokens: 8192,
+		contextWindow: 200_000,
+		supportsImages: false,
+		supportsPromptCache: false,
+		inputPrice: 1.0,
+		outputPrice: 5.0,
+	},
 	"claude-3-opus@20240229": {
 		maxTokens: 4096,
 		contextWindow: 200_000,
@@ -197,8 +235,32 @@ export const openAiModelInfoSaneDefaults: ModelInfo = {
 // Gemini
 // https://ai.google.dev/gemini-api/docs/models/gemini
 export type GeminiModelId = keyof typeof geminiModels
-export const geminiDefaultModelId: GeminiModelId = "gemini-1.5-flash-002"
+export const geminiDefaultModelId: GeminiModelId = "gemini-2.0-flash-thinking-exp-1219"
 export const geminiModels = {
+	"gemini-2.0-flash-thinking-exp-1219": {
+		maxTokens: 8192,
+		contextWindow: 32_767,
+		supportsImages: true,
+		supportsPromptCache: false,
+		inputPrice: 0,
+		outputPrice: 0,
+	},
+	"gemini-2.0-flash-exp": {
+		maxTokens: 8192,
+		contextWindow: 1_048_576,
+		supportsImages: true,
+		supportsPromptCache: false,
+		inputPrice: 0,
+		outputPrice: 0,
+	},
+	"gemini-exp-1206": {
+		maxTokens: 8192,
+		contextWindow: 2_097_152,
+		supportsImages: true,
+		supportsPromptCache: false,
+		inputPrice: 0,
+		outputPrice: 0,
+	},
 	"gemini-1.5-flash-002": {
 		maxTokens: 8192,
 		contextWindow: 1_048_576,

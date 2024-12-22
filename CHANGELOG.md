@@ -1,5 +1,51 @@
 # Change Log
 
+## [3.0.4]
+
+- Fix bug where gemini models would add code block artifacts to the end of text content
+- Fix context mention menu visual issues on light themes
+
+## [3.0.2]
+
+- Adds block anchor matching for more reliable diff edits (if 3+ lines, first and last line are used as anchors to search for)
+- Add instruction to system prompt to use complete lines in diff edits to work properly with fallback strategies
+- Improves diff edit error handling
+- Adds new Gemini models
+
+## [3.0.0]
+
+- Cline now uses a search & replace diff based approach when editing large files to prevent code deletion issues.
+- Adds support for a more comprehensive auto-approve configuration, allowing you to specify which tools require approval and which don't.
+- Adds ability to enable system notifications for when Cline needs approval or completes a task.
+- Adds support for a root-level `.clinerules` file that can be used to specify custom instructions for the project.
+
+## [2.2.0]
+
+- Add support for Model Context Protocol (MCP), enabling Cline to use custom tools like web-search tool or GitHub tool
+- Add MCP server management tab accessible via the server icon in the menu bar
+- Add ability for Cline to dynamically create new MCP servers based on user requests (e.g., "add a tool that gets the latest npm docs")
+
+## [2.1.6]
+
+- Add LM Studio as an API provider option (make sure to start the LM Studio server to use it with the extension!)
+
+## [2.1.5]
+
+- Add support for prompt caching for new Claude model IDs on OpenRouter (e.g. `anthropic/claude-3.5-sonnet-20240620`)
+
+## [2.1.4]
+
+- AWS Bedrock fixes (add missing regions, support for cross-region inference, and older Sonnet model for regions where new model is not available)
+
+## [2.1.3]
+
+- Add support for Claude 3.5 Haiku, 66% cheaper than Sonnet with similar intelligence
+
+## [2.1.2]
+
+- Misc. bug fixes
+- Update README with new browser feature
+
 ## [2.1.1]
 
 - Add stricter prompt to prevent Cline from editing files during a browser session without first closing the browser

@@ -66,7 +66,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 		let nextActionMessages: ClineMessage[] = []
 
 		messages.forEach((message) => {
-			if (message.ask === "browser_action_launch") {
+			if (message.ask === "browser_action_launch" || message.say === "browser_action_launch") {
 				// Start first page
 				currentStateMessages = [message]
 			} else if (message.say === "browser_action_result") {
@@ -91,7 +91,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 						nextActionMessages.length > 0
 							? {
 									messages: [...nextActionMessages],
-							  }
+								}
 							: undefined,
 				})
 
@@ -121,7 +121,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					nextActionMessages.length > 0
 						? {
 								messages: [...nextActionMessages],
-						  }
+							}
 						: undefined,
 			})
 		}
@@ -137,8 +137,17 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 
 	// Get initial URL from launch message
 	const initialUrl = useMemo(() => {
-		const launchMessage = messages.find((m) => m.ask === "browser_action_launch")
+		const launchMessage = messages.find(
+			(m) => m.ask === "browser_action_launch" || m.say === "browser_action_launch",
+		)
 		return launchMessage?.text || ""
+	}, [messages])
+
+	const isAutoApproved = useMemo(() => {
+		const launchMessage = messages.find(
+			(m) => m.ask === "browser_action_launch" || m.say === "browser_action_launch",
+		)
+		return launchMessage?.say === "browser_action_launch"
 	}, [messages])
 
 	// Find the latest available URL and screenshot
@@ -167,13 +176,13 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 				mousePosition: currentPage?.currentState.mousePosition || latestState.mousePosition || "700,400",
 				consoleLogs: currentPage?.currentState.consoleLogs,
 				screenshot: currentPage?.currentState.screenshot || latestState.screenshot,
-		  }
+			}
 		: {
 				url: currentPage?.currentState.url || initialUrl,
 				mousePosition: currentPage?.currentState.mousePosition || "700,400",
 				consoleLogs: currentPage?.currentState.consoleLogs,
 				screenshot: currentPage?.currentState.screenshot,
-		  }
+			}
 
 	const [actionContent, { height: actionHeight }] = useSize(
 		<div>
@@ -188,7 +197,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 			{!isBrowsing && messages.some((m) => m.say === "browser_action_result") && currentPageIndex === 0 && (
 				<BrowserActionBox action={"launch"} text={initialUrl} />
 			)}
-		</div>
+		</div>,
 	)
 
 	useEffect(() => {
@@ -232,7 +241,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 						style={{ color: "var(--vscode-foreground)", marginBottom: "-1.5px" }}></span>
 				)}
 				<span style={{ fontWeight: "bold" }}>
-					<>Cline wants to use the browser:</>
+					<>{isAutoApproved ? "Cline is using the browser:" : "Cline wants to use the browser:"}</>
 				</span>
 			</div>
 			<div
@@ -381,7 +390,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					</div>
 				</div>
 			)}
-		</div>
+		</div>,
 	)
 
 	// Height change effect
@@ -416,6 +425,25 @@ const BrowserSessionRowContent = ({
 		alignItems: "center",
 		gap: "10px",
 		marginBottom: "10px",
+	}
+
+	if (message.ask === "browser_action_launch" || message.say === "browser_action_launch") {
+		return (
+			<>
+				<div style={headerStyle}>
+					<span style={{ fontWeight: "bold" }}>Browser Session Started</span>
+				</div>
+				<div
+					style={{
+						borderRadius: 3,
+						border: "1px solid var(--vscode-editorGroup-border)",
+						overflow: "hidden",
+						backgroundColor: CODE_BLOCK_BG_COLOR,
+					}}>
+					<CodeBlock source={`${"```"}shell\n${message.text}\n${"```"}`} forceWrap={true} />
+				</div>
+			</>
+		)
 	}
 
 	switch (message.type) {
@@ -456,24 +484,6 @@ const BrowserSessionRowContent = ({
 
 		case "ask":
 			switch (message.ask) {
-				case "browser_action_launch":
-					return (
-						<>
-							<div style={headerStyle}>
-								<span style={{ fontWeight: "bold" }}>Browser Session Started</span>
-							</div>
-							<div
-								style={{
-									borderRadius: 3,
-									border: "1px solid var(--vscode-editorGroup-border)",
-									overflow: "hidden",
-									backgroundColor: CODE_BLOCK_BG_COLOR,
-								}}>
-								<CodeBlock source={`${"```"}shell\n${message.text}\n${"```"}`} forceWrap={true} />
-							</div>
-						</>
-					)
-
 				default:
 					return null
 			}

@@ -1,6 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import axios from "axios"
 import fs from "fs/promises"
+import os from "os"
 import pWaitFor from "p-wait-for"
 import * as path from "path"
 import * as vscode from "vscode"
@@ -10,6 +11,7 @@ import { openFile, openImage } from "../../integrations/misc/open-file"
 import { selectImages } from "../../integrations/misc/process-images"
 import { getTheme } from "../../integrations/theme/getTheme"
 import WorkspaceTracker from "../../integrations/workspace/WorkspaceTracker"
+import { McpHub } from "../../services/mcp/McpHub"
 import { ApiProvider, ModelInfo } from "../../shared/api"
 import { findLast } from "../../shared/array"
 import { ExtensionMessage } from "../../shared/ExtensionMessage"
@@ -20,6 +22,7 @@ import { Cline } from "../Cline"
 import { openMention } from "../mentions"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
+import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "../../shared/AutoApprovalSettings"
 
 /*
 https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -40,25 +43,30 @@ type GlobalStateKey =
 	| "apiProvider"
 	| "apiModelId"
 	| "awsRegion"
+	| "awsUseCrossRegionInference"
 	| "vertexProjectId"
 	| "vertexRegion"
 	| "lastShownAnnouncementId"
 	| "customInstructions"
-	| "alwaysAllowReadOnly"
 	| "taskHistory"
 	| "openAiBaseUrl"
 	| "openAiModelId"
 	| "ollamaModelId"
 	| "ollamaBaseUrl"
+	| "lmStudioModelId"
+	| "lmStudioBaseUrl"
 	| "anthropicBaseUrl"
 	| "azureApiVersion"
 	| "openRouterModelId"
 	| "openRouterModelInfo"
+	| "autoApprovalSettings"
 
 export const GlobalFileNames = {
 	apiConversationHistory: "api_conversation_history.json",
 	uiMessages: "ui_messages.json",
 	openRouterModels: "openrouter_models.json",
+	mcpSettings: "cline_mcp_settings.json",
+	clineRules: ".clinerules",
 }
 
 export class ClineProvider implements vscode.WebviewViewProvider {
@@ -69,12 +77,17 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView | vscode.WebviewPanel
 	private cline?: Cline
 	private workspaceTracker?: WorkspaceTracker
-	private latestAnnouncementId = "oct-28-2024" // update to some unique identifier when we add a new announcement
+	mcpHub?: McpHub
+	private latestAnnouncementId = "dec-17-2024" // update to some unique identifier when we add a new announcement
 
-	constructor(readonly context: vscode.ExtensionContext, private readonly outputChannel: vscode.OutputChannel) {
+	constructor(
+		readonly context: vscode.ExtensionContext,
+		private readonly outputChannel: vscode.OutputChannel,
+	) {
 		this.outputChannel.appendLine("ClineProvider instantiated")
 		ClineProvider.activeInstances.add(this)
 		this.workspaceTracker = new WorkspaceTracker(this)
+		this.mcpHub = new McpHub(this)
 	}
 
 	/*
@@ -98,6 +111,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 		}
 		this.workspaceTracker?.dispose()
 		this.workspaceTracker = undefined
+		this.mcpHub?.dispose()
+		this.mcpHub = undefined
 		this.outputChannel.appendLine("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 	}
@@ -107,7 +122,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	}
 
 	resolveWebviewView(
-		webviewView: vscode.WebviewView | vscode.WebviewPanel
+		webviewView: vscode.WebviewView | vscode.WebviewPanel,
 		//context: vscode.WebviewViewResolveContext<unknown>, used to recreate a deallocated webview, but we don't need this since we use retainContextWhenHidden
 		//token: vscode.CancellationToken
 	): void | Thenable<void> {
@@ -140,7 +155,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					}
 				},
 				null,
-				this.disposables
+				this.disposables,
 			)
 		} else if ("onDidChangeVisibility" in webviewView) {
 			// sidebar
@@ -151,7 +166,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					}
 				},
 				null,
-				this.disposables
+				this.disposables,
 			)
 		}
 
@@ -162,7 +177,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				await this.dispose()
 			},
 			null,
-			this.disposables
+			this.disposables,
 		)
 
 		// Listen for when color changes
@@ -174,7 +189,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				}
 			},
 			null,
-			this.disposables
+			this.disposables,
 		)
 
 		// if the extension is starting a new session, clear previous task state
@@ -185,21 +200,21 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 
 	async initClineWithTask(task?: string, images?: string[]) {
 		await this.clearTask() // ensures that an exising task doesn't exist before starting a new one, although this shouldn't be possible since user must clear task before starting a new one
-		const { apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
-		this.cline = new Cline(this, apiConfiguration, customInstructions, alwaysAllowReadOnly, task, images)
+		const { apiConfiguration, customInstructions, autoApprovalSettings } = await this.getState()
+		this.cline = new Cline(this, apiConfiguration, autoApprovalSettings, customInstructions, task, images)
 	}
 
 	async initClineWithHistoryItem(historyItem: HistoryItem) {
 		await this.clearTask()
-		const { apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
+		const { apiConfiguration, customInstructions, autoApprovalSettings } = await this.getState()
 		this.cline = new Cline(
 			this,
 			apiConfiguration,
+			autoApprovalSettings,
 			customInstructions,
-			alwaysAllowReadOnly,
 			undefined,
 			undefined,
-			historyItem
+			historyItem,
 		)
 	}
 
@@ -303,7 +318,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						this.postStateToWebview()
 						this.workspaceTracker?.initializeFilePaths() // don't await
 						getTheme().then((theme) =>
-							this.postMessageToWebview({ type: "theme", text: JSON.stringify(theme) })
+							this.postMessageToWebview({ type: "theme", text: JSON.stringify(theme) }),
 						)
 						// post last cached models in case the call to endpoint fails
 						this.readOpenRouterModels().then((openRouterModels) => {
@@ -321,7 +336,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 								if (apiConfiguration.openRouterModelId) {
 									await this.updateGlobalState(
 										"openRouterModelInfo",
-										openRouterModels[apiConfiguration.openRouterModelId]
+										openRouterModels[apiConfiguration.openRouterModelId],
 									)
 									await this.postStateToWebview()
 								}
@@ -350,6 +365,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 								awsSecretKey,
 								awsSessionToken,
 								awsRegion,
+								awsUseCrossRegionInference,
 								vertexProjectId,
 								vertexRegion,
 								openAiBaseUrl,
@@ -357,6 +373,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 								openAiModelId,
 								ollamaModelId,
 								ollamaBaseUrl,
+								lmStudioModelId,
+								lmStudioBaseUrl,
 								anthropicBaseUrl,
 								geminiApiKey,
 								openAiNativeApiKey,
@@ -372,6 +390,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 							await this.storeSecret("awsSecretKey", awsSecretKey)
 							await this.storeSecret("awsSessionToken", awsSessionToken)
 							await this.updateGlobalState("awsRegion", awsRegion)
+							await this.updateGlobalState("awsUseCrossRegionInference", awsUseCrossRegionInference)
 							await this.updateGlobalState("vertexProjectId", vertexProjectId)
 							await this.updateGlobalState("vertexRegion", vertexRegion)
 							await this.updateGlobalState("openAiBaseUrl", openAiBaseUrl)
@@ -379,6 +398,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 							await this.updateGlobalState("openAiModelId", openAiModelId)
 							await this.updateGlobalState("ollamaModelId", ollamaModelId)
 							await this.updateGlobalState("ollamaBaseUrl", ollamaBaseUrl)
+							await this.updateGlobalState("lmStudioModelId", lmStudioModelId)
+							await this.updateGlobalState("lmStudioBaseUrl", lmStudioBaseUrl)
 							await this.updateGlobalState("anthropicBaseUrl", anthropicBaseUrl)
 							await this.storeSecret("geminiApiKey", geminiApiKey)
 							await this.storeSecret("openAiNativeApiKey", openAiNativeApiKey)
@@ -394,12 +415,14 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					case "customInstructions":
 						await this.updateCustomInstructions(message.text)
 						break
-					case "alwaysAllowReadOnly":
-						await this.updateGlobalState("alwaysAllowReadOnly", message.bool ?? undefined)
-						if (this.cline) {
-							this.cline.alwaysAllowReadOnly = message.bool ?? false
+					case "autoApprovalSettings":
+						if (message.autoApprovalSettings) {
+							await this.updateGlobalState("autoApprovalSettings", message.autoApprovalSettings)
+							if (this.cline) {
+								this.cline.autoApprovalSettings = message.autoApprovalSettings
+							}
+							await this.postStateToWebview()
 						}
-						await this.postStateToWebview()
 						break
 					case "askResponse":
 						this.cline?.handleWebviewAskResponse(message.askResponse!, message.text, message.images)
@@ -439,6 +462,10 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						const ollamaModels = await this.getOllamaModels(message.text)
 						this.postMessageToWebview({ type: "ollamaModels", ollamaModels })
 						break
+					case "requestLmStudioModels":
+						const lmStudioModels = await this.getLmStudioModels(message.text)
+						this.postMessageToWebview({ type: "lmStudioModels", lmStudioModels })
+						break
 					case "refreshOpenRouterModels":
 						await this.refreshOpenRouterModels()
 						break
@@ -469,12 +496,27 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						}
 
 						break
+					case "openMcpSettings": {
+						const mcpSettingsFilePath = await this.mcpHub?.getMcpSettingsFilePath()
+						if (mcpSettingsFilePath) {
+							openFile(mcpSettingsFilePath)
+						}
+						break
+					}
+					case "restartMcpServer": {
+						try {
+							await this.mcpHub?.restartConnection(message.text!)
+						} catch (error) {
+							console.error(`Failed to retry connection for ${message.text}:`, error)
+						}
+						break
+					}
 					// Add more switch case statements here as more webview message commands
 					// are created within the webview context (i.e. inside media/main.js)
 				}
 			},
 			null,
-			this.disposables
+			this.disposables,
 		)
 	}
 
@@ -485,6 +527,24 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.cline.customInstructions = instructions || undefined
 		}
 		await this.postStateToWebview()
+	}
+
+	// MCP
+
+	async ensureMcpServersDirectoryExists(): Promise<string> {
+		const mcpServersDir = path.join(os.homedir(), "Documents", "Cline", "MCP")
+		try {
+			await fs.mkdir(mcpServersDir, { recursive: true })
+		} catch (error) {
+			return "~/Documents/Cline/MCP" // in case creating a directory in documents fails for whatever reason (e.g. permissions) - this is fine since this path is only ever used in the system prompt
+		}
+		return mcpServersDir
+	}
+
+	async ensureSettingsDirectoryExists(): Promise<string> {
+		const settingsDir = path.join(this.context.globalStorageUri.fsPath, "settings")
+		await fs.mkdir(settingsDir, { recursive: true })
+		return settingsDir
 	}
 
 	// Ollama
@@ -499,6 +559,25 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			}
 			const response = await axios.get(`${baseUrl}/api/tags`)
 			const modelsArray = response.data?.models?.map((model: any) => model.name) || []
+			const models = [...new Set<string>(modelsArray)]
+			return models
+		} catch (error) {
+			return []
+		}
+	}
+
+	// LM Studio
+
+	async getLmStudioModels(baseUrl?: string) {
+		try {
+			if (!baseUrl) {
+				baseUrl = "http://localhost:1234"
+			}
+			if (!URL.canParse(baseUrl)) {
+				return []
+			}
+			const response = await axios.get(`${baseUrl}/v1/models`)
+			const modelsArray = response.data?.data?.map((model: any) => model.id) || []
 			const models = [...new Set<string>(modelsArray)]
 			return models
 		} catch (error) {
@@ -541,7 +620,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	async readOpenRouterModels(): Promise<Record<string, ModelInfo> | undefined> {
 		const openRouterModelsFilePath = path.join(
 			await this.ensureCacheDirectoryExists(),
-			GlobalFileNames.openRouterModels
+			GlobalFileNames.openRouterModels,
 		)
 		const fileExists = await fileExistsAtPath(openRouterModelsFilePath)
 		if (fileExists) {
@@ -554,7 +633,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	async refreshOpenRouterModels() {
 		const openRouterModelsFilePath = path.join(
 			await this.ensureCacheDirectoryExists(),
-			GlobalFileNames.openRouterModels
+			GlobalFileNames.openRouterModels,
 		)
 
 		let models: Record<string, ModelInfo> = {}
@@ -619,6 +698,18 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 							modelInfo.supportsPromptCache = true
 							modelInfo.cacheWritesPrice = 3.75
 							modelInfo.cacheReadsPrice = 0.3
+							break
+						case "anthropic/claude-3-5-haiku":
+						case "anthropic/claude-3-5-haiku:beta":
+						case "anthropic/claude-3-5-haiku-20241022":
+						case "anthropic/claude-3-5-haiku-20241022:beta":
+						case "anthropic/claude-3.5-haiku":
+						case "anthropic/claude-3.5-haiku:beta":
+						case "anthropic/claude-3.5-haiku-20241022":
+						case "anthropic/claude-3.5-haiku-20241022:beta":
+							modelInfo.supportsPromptCache = true
+							modelInfo.cacheWritesPrice = 1.25
+							modelInfo.cacheReadsPrice = 0.1
 							break
 						case "anthropic/claude-3-opus":
 						case "anthropic/claude-3-opus:beta":
@@ -737,17 +828,17 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 	}
 
 	async getStateToPostToWebview() {
-		const { apiConfiguration, lastShownAnnouncementId, customInstructions, alwaysAllowReadOnly, taskHistory } =
+		const { apiConfiguration, lastShownAnnouncementId, customInstructions, taskHistory, autoApprovalSettings } =
 			await this.getState()
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
 			apiConfiguration,
 			customInstructions,
-			alwaysAllowReadOnly,
 			uriScheme: vscode.env.uriScheme,
 			clineMessages: this.cline?.clineMessages || [],
 			taskHistory: (taskHistory || []).filter((item) => item.ts && item.task).sort((a, b) => b.ts - a.ts),
 			shouldShowAnnouncement: lastShownAnnouncementId !== this.latestAnnouncementId,
+			autoApprovalSettings,
 		}
 	}
 
@@ -812,6 +903,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			awsSecretKey,
 			awsSessionToken,
 			awsRegion,
+			awsUseCrossRegionInference,
 			vertexProjectId,
 			vertexRegion,
 			openAiBaseUrl,
@@ -819,6 +911,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			openAiModelId,
 			ollamaModelId,
 			ollamaBaseUrl,
+			lmStudioModelId,
+			lmStudioBaseUrl,
 			anthropicBaseUrl,
 			geminiApiKey,
 			openAiNativeApiKey,
@@ -827,8 +921,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			openRouterModelInfo,
 			lastShownAnnouncementId,
 			customInstructions,
-			alwaysAllowReadOnly,
 			taskHistory,
+			autoApprovalSettings,
 		] = await Promise.all([
 			this.getGlobalState("apiProvider") as Promise<ApiProvider | undefined>,
 			this.getGlobalState("apiModelId") as Promise<string | undefined>,
@@ -838,6 +932,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.getSecret("awsSecretKey") as Promise<string | undefined>,
 			this.getSecret("awsSessionToken") as Promise<string | undefined>,
 			this.getGlobalState("awsRegion") as Promise<string | undefined>,
+			this.getGlobalState("awsUseCrossRegionInference") as Promise<boolean | undefined>,
 			this.getGlobalState("vertexProjectId") as Promise<string | undefined>,
 			this.getGlobalState("vertexRegion") as Promise<string | undefined>,
 			this.getGlobalState("openAiBaseUrl") as Promise<string | undefined>,
@@ -845,6 +940,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.getGlobalState("openAiModelId") as Promise<string | undefined>,
 			this.getGlobalState("ollamaModelId") as Promise<string | undefined>,
 			this.getGlobalState("ollamaBaseUrl") as Promise<string | undefined>,
+			this.getGlobalState("lmStudioModelId") as Promise<string | undefined>,
+			this.getGlobalState("lmStudioBaseUrl") as Promise<string | undefined>,
 			this.getGlobalState("anthropicBaseUrl") as Promise<string | undefined>,
 			this.getSecret("geminiApiKey") as Promise<string | undefined>,
 			this.getSecret("openAiNativeApiKey") as Promise<string | undefined>,
@@ -853,8 +950,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.getGlobalState("openRouterModelInfo") as Promise<ModelInfo | undefined>,
 			this.getGlobalState("lastShownAnnouncementId") as Promise<string | undefined>,
 			this.getGlobalState("customInstructions") as Promise<string | undefined>,
-			this.getGlobalState("alwaysAllowReadOnly") as Promise<boolean | undefined>,
 			this.getGlobalState("taskHistory") as Promise<HistoryItem[] | undefined>,
+			this.getGlobalState("autoApprovalSettings") as Promise<AutoApprovalSettings | undefined>,
 		])
 
 		let apiProvider: ApiProvider
@@ -881,6 +978,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				awsSecretKey,
 				awsSessionToken,
 				awsRegion,
+				awsUseCrossRegionInference,
 				vertexProjectId,
 				vertexRegion,
 				openAiBaseUrl,
@@ -888,6 +986,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				openAiModelId,
 				ollamaModelId,
 				ollamaBaseUrl,
+				lmStudioModelId,
+				lmStudioBaseUrl,
 				anthropicBaseUrl,
 				geminiApiKey,
 				openAiNativeApiKey,
@@ -897,8 +997,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			},
 			lastShownAnnouncementId,
 			customInstructions,
-			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
 			taskHistory,
+			autoApprovalSettings: autoApprovalSettings || DEFAULT_AUTO_APPROVAL_SETTINGS, // default value can be 0 or empty string
 		}
 	}
 
